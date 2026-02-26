@@ -1,0 +1,29 @@
+{
+    "api": {
+        "base_url": "https://valorant-api.com/v1",
+        "language": "en-US",
+        "endpoints": [
+            "agents",
+            "weapons",
+            "maps",
+            "gamemodes",
+            "competitivetiers"
+        ],
+        "request_delay_seconds": 0.5,
+        "timeout_seconds": 30
+    },
+    "database": {
+        "path": "/app/data/valorant_etl.db",
+        "local_path": "data/valorant_etl.db"
+    },
+    "schedule": {
+        "interval_hours": 6,
+        "run_on_start": true
+    },
+    "logging": {
+        "level": "INFO",
+        "log_file": "/app/data/etl_pipeline.log",
+        "local_log_file": "data/etl_pipeline.log",
+        "max_log_size_mb": 10
+    }
+}
