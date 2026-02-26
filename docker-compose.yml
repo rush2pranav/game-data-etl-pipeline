@@ -1,1 +1,33 @@
-ECHO is on.
+
+# --------------------------------------------
+# Valorant ETL Pipeline — Docker Compose
+# --------------------------------------------
+# Usage:
+#   Single run:     docker compose up etl-once
+#   Scheduled mode: docker compose up etl-scheduled
+#   Both:           docker compose up
+# ============================================
+
+services:
+  # run the pipeline once and exit
+  etl-once:
+    build: .
+    container_name: valorant-etl-once
+    command: ["--once"]
+    volumes:
+      - etl-data:/app/data
+      - ./config:/app/config:ro
+
+  # run the pipeline on a schedule which is scheduled for every 6 hours
+  etl-scheduled:
+    build: .
+    container_name: valorant-etl-scheduled
+    command: []
+    volumes:
+      - etl-data:/app/data
+      - ./config:/app/config:ro
+    restart: unless-stopped
+
+volumes:
+  etl-data:
+    driver: local

@@ -11,7 +11,6 @@ A production-style ETL (Extract - Transform - Load) pipeline that:
 Proudly designed to run standalone or inside a Docker container :) (still learning so forgive all the rookue mistakes)
 """
 
-from importlib.abc import Loader
 import json
 import logging
 import os
@@ -24,13 +23,12 @@ import pandas as pd
 import requests
 import schedule
 
-# CONFIGURATION SECTION
-
+# CONFIGURATION
 def load_config():
-    """Load pipeline configuration from JSON file."""
+    """Load pipeline configuration from JSON file"""
     config_paths = [
-        '/app/config/pipeline_config.json',       # this is docker path
-        'config/pipeline_config.json',             # this is the local path
+        '/app/config/pipeline_config.json',       # Docker path
+        'config/pipeline_config.json',             # Local path
     ]
     for path in config_paths:
         if os.path.exists(path):
@@ -40,11 +38,11 @@ def load_config():
 
 
 def setup_logging(config):
-    """Configure logging to both file and console."""
+    """Configure logging to both file and console"""
     log_cfg = config.get('logging', {})
     level = getattr(logging, log_cfg.get('level', 'INFO'))
 
-    # this is for determining the log file path
+    # to determine log file path 
     log_file = log_cfg.get('log_file', 'data/etl_pipeline.log')
     if not os.path.exists('/app') and 'local_log_file' in log_cfg:
         log_file = log_cfg['local_log_file']
@@ -62,8 +60,8 @@ def setup_logging(config):
     )
     return logging.getLogger('etl_pipeline')
 
-# EXTRACTION WHERE WE WILL BE PULLING THE DATA FROM THE VALORANT API
 
+# extraction pulling the data from th valorant api
 class Extractor:
     """Handles all API communication and raw data extraction"""
 
@@ -113,17 +111,17 @@ class Extractor:
             raw_data[endpoint] = self.fetch_endpoint(endpoint)
             time.sleep(self.delay)
         return raw_data
-    
-   # CLEANING AND STRUCTURING THE RAW DATA
 
+
+# structure and cleaan the raw data
 class Transformer:
-    """Transforms raw API JSON into clean data frames"""
+    """Transforms raw API JSON into clean DataFrames"""
 
     def __init__(self):
         self.logger = logging.getLogger('etl_pipeline.transform')
 
     def transform_all(self, raw_data):
-        """Transform all extracted data into data frames"""
+        """Transform all extracted data into DataFrames"""
         transformed = {}
 
         if 'agents' in raw_data:
@@ -235,14 +233,14 @@ class Transformer:
                 'allows_timeouts': mode.get('allowsMatchTimeouts', False),
             })
         return pd.DataFrame(modes)
-    
-# LOADING aand WRITING DATA FRAMES TO THE DATABASE
-    class Loader:
-     """Loads transformed data frames into the database"""
+
+
+# writing the data frames to the database
+class Loader:
+    """Loads transformed DataFrames into database"""
 
     def __init__(self, config):
         db_cfg = config.get('database', {})
-        # Use Docker path if running in container else local
         if os.path.exists('/app'):
             self.db_path = db_cfg.get('path', '/app/data/valorant_etl.db')
         else:
@@ -256,7 +254,6 @@ class Transformer:
         conn = sqlite3.connect(self.db_path)
 
         try:
-            # Creates the metadata table for tracking ETL runs
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS etl_runs (
                     run_id TEXT PRIMARY KEY,
@@ -277,19 +274,15 @@ class Transformer:
                     self.logger.warning(f"  Skipping empty table: {table_name}")
                     continue
 
-                # Add ETL metadata columns
                 df = df.copy()
                 df['_etl_run_id'] = run_id
                 df['_etl_loaded_at'] = datetime.now(timezone.utc).isoformat()
-
-                # Replace table contents
                 df.to_sql(table_name, conn, if_exists='replace', index=False)
                 total_rows += len(df)
                 self.logger.info(f"  Loaded: {table_name} -> {len(df)} rows")
 
             duration = time.time() - start_time
 
-            # Record the etl run
             conn.execute('''
                 INSERT OR REPLACE INTO etl_runs VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
@@ -316,7 +309,8 @@ class Transformer:
         finally:
             conn.close()
 
-# PIPELINE ORCHESTRATION. THIS IS WHERE WE WILL TIE EVERYTHING TOGETHER
+
+# pipeline class to orchestrate the whole process
 class ETLPipeline:
     """Orchestrates the full Extract -> Transform -> Load pipeline"""
 
@@ -337,21 +331,21 @@ class ETLPipeline:
         start = time.time()
 
         try:
-            #  extract
+            # EXTRACT
             self.logger.info("\n--- EXTRACT PHASE ---")
             endpoints = self.config['api']['endpoints']
             raw_data = self.extractor.extract_all(endpoints)
 
-            # trnsform
+            # TRANSFORM
             self.logger.info("\n--- TRANSFORM PHASE ---")
             transformed = self.transformer.transform_all(raw_data)
 
-            # load
+            # LOAD
             self.logger.info("\n--- LOAD PHASE ---")
             self.loader.load_all(transformed, run_id)
 
             duration = time.time() - start
-            self.logger.info(f"\nPIPELINE COMPLETE - {duration:.2f}s total")
+            self.logger.info(f"\nPIPELINE COMPLETE — {duration:.2f}s total")
             self.logger.info("=" * 60)
 
         except Exception as e:
@@ -359,8 +353,8 @@ class ETLPipeline:
             self.logger.info("=" * 60)
             raise
 
-# MAIN 
 
+#main
 def main():
     config = load_config()
     logger = setup_logging(config)
@@ -372,7 +366,7 @@ def main():
     pipeline = ETLPipeline(config)
     sched_cfg = config.get('schedule', {})
 
-    # run immediately
+    # run immediately on start 
     if sched_cfg.get('run_on_start', True):
         pipeline.run()
 
@@ -380,7 +374,7 @@ def main():
     interval = sched_cfg.get('interval_hours', 0)
     if interval > 0 and '--once' not in sys.argv:
         logger.info(f"\nScheduling pipeline to run every {interval} hours...")
-        logger.info("Press Ctrl + C to stop\n")
+        logger.info("Press Ctrl + C to stop.\n")
 
         schedule.every(interval).hours.do(pipeline.run)
 
@@ -389,7 +383,7 @@ def main():
                 schedule.run_pending()
                 time.sleep(60)
         except KeyboardInterrupt:
-            logger.info("\nPipeline stopped by user")
+            logger.info("\nPipeline stopped by user.")
     else:
         logger.info("\nSingle run complete. Use without --once for scheduled mode.")
 
