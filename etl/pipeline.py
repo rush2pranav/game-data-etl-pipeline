@@ -11,6 +11,7 @@ A production-style ETL (Extract - Transform - Load) pipeline that:
 Proudly designed to run standalone or inside a Docker container :) (still learning so forgive all the rookue mistakes)
 """
 
+from importlib.abc import Loader
 import json
 import logging
 import os
@@ -234,3 +235,164 @@ class Transformer:
                 'allows_timeouts': mode.get('allowsMatchTimeouts', False),
             })
         return pd.DataFrame(modes)
+    
+# LOADING aand WRITING DATA FRAMES TO THE DATABASE
+    class Loader:
+     """Loads transformed data frames into the database"""
+
+    def __init__(self, config):
+        db_cfg = config.get('database', {})
+        # Use Docker path if running in container else local
+        if os.path.exists('/app'):
+            self.db_path = db_cfg.get('path', '/app/data/valorant_etl.db')
+        else:
+            self.db_path = db_cfg.get('local_path', 'data/valorant_etl.db')
+
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.logger = logging.getLogger('etl_pipeline.load')
+
+    def load_all(self, transformed_data, run_id):
+        """Load all DataFrames into the database."""
+        conn = sqlite3.connect(self.db_path)
+
+        try:
+            # Creates the metadata table for tracking ETL runs
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS etl_runs (
+                    run_id TEXT PRIMARY KEY,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    status TEXT,
+                    tables_loaded INTEGER,
+                    total_rows INTEGER,
+                    duration_seconds REAL
+                )
+            ''')
+
+            start_time = time.time()
+            total_rows = 0
+
+            for table_name, df in transformed_data.items():
+                if df.empty:
+                    self.logger.warning(f"  Skipping empty table: {table_name}")
+                    continue
+
+                # Add ETL metadata columns
+                df = df.copy()
+                df['_etl_run_id'] = run_id
+                df['_etl_loaded_at'] = datetime.now(timezone.utc).isoformat()
+
+                # Replace table contents
+                df.to_sql(table_name, conn, if_exists='replace', index=False)
+                total_rows += len(df)
+                self.logger.info(f"  Loaded: {table_name} -> {len(df)} rows")
+
+            duration = time.time() - start_time
+
+            # Record the etl run
+            conn.execute('''
+                INSERT OR REPLACE INTO etl_runs VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                run_id,
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+                'Success',
+                len(transformed_data),
+                total_rows,
+                round(duration, 2)
+            ))
+            conn.commit()
+
+            self.logger.info(f"  Database: {self.db_path}")
+            self.logger.info(f"  Total: {total_rows} rows across {len(transformed_data)} tables in {duration:.2f}s")
+
+        except Exception as e:
+            conn.execute('''
+                INSERT OR REPLACE INTO etl_runs VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (run_id, datetime.now(timezone.utc).isoformat(),
+                  datetime.now(timezone.utc).isoformat(), f'Failed: {e}', 0, 0, 0))
+            conn.commit()
+            raise
+        finally:
+            conn.close()
+
+# PIPELINE ORCHESTRATION. THIS IS WHERE WE WILL TIE EVERYTHING TOGETHER
+class ETLPipeline:
+    """Orchestrates the full Extract -> Transform -> Load pipeline"""
+
+    def __init__(self, config):
+        self.config = config
+        self.extractor = Extractor(config)
+        self.transformer = Transformer()
+        self.loader = Loader(config)
+        self.logger = logging.getLogger('etl_pipeline')
+
+    def run(self):
+        """Execute one full ETL cycle"""
+        run_id = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        self.logger.info("=" * 60)
+        self.logger.info(f"ETL PIPELINE RUN: {run_id}")
+        self.logger.info("=" * 60)
+
+        start = time.time()
+
+        try:
+            #  extract
+            self.logger.info("\n--- EXTRACT PHASE ---")
+            endpoints = self.config['api']['endpoints']
+            raw_data = self.extractor.extract_all(endpoints)
+
+            # trnsform
+            self.logger.info("\n--- TRANSFORM PHASE ---")
+            transformed = self.transformer.transform_all(raw_data)
+
+            # load
+            self.logger.info("\n--- LOAD PHASE ---")
+            self.loader.load_all(transformed, run_id)
+
+            duration = time.time() - start
+            self.logger.info(f"\nPIPELINE COMPLETE - {duration:.2f}s total")
+            self.logger.info("=" * 60)
+
+        except Exception as e:
+            self.logger.error(f"\nPIPELINE FAILED: {e}")
+            self.logger.info("=" * 60)
+            raise
+
+# MAIN 
+
+def main():
+    config = load_config()
+    logger = setup_logging(config)
+
+    logger.info("----------------------------------------")
+    logger.info("|   Valorant Game Data ETL Pipeline    |")
+    logger.info("----------------------------------------")
+
+    pipeline = ETLPipeline(config)
+    sched_cfg = config.get('schedule', {})
+
+    # run immediately
+    if sched_cfg.get('run_on_start', True):
+        pipeline.run()
+
+    # check if scheduling is requested
+    interval = sched_cfg.get('interval_hours', 0)
+    if interval > 0 and '--once' not in sys.argv:
+        logger.info(f"\nScheduling pipeline to run every {interval} hours...")
+        logger.info("Press Ctrl + C to stop\n")
+
+        schedule.every(interval).hours.do(pipeline.run)
+
+        try:
+            while True:
+                schedule.run_pending()
+                time.sleep(60)
+        except KeyboardInterrupt:
+            logger.info("\nPipeline stopped by user")
+    else:
+        logger.info("\nSingle run complete. Use without --once for scheduled mode.")
+
+
+if __name__ == '__main__':
+    main()
